@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>cup_detection</name>
+  <version>1.0.0</version>
+  <description>
+    ROS package for autonomous cup detection and approach behavior for PuppyPi robot.
+    Detects cups using computer vision and commands the robot to walk toward them.
+  </description>
+  
+  <maintainer email="user@example.com">PuppyPi Developer</maintainer>
+  <license>MIT</license>
+  
+  <buildtool_depend>catkin</buildtool_depend>
+  
+  <depend>rospy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>puppy_control</depend>
+  <depend>std_srvs</depend>
+  <depend>interfaces</depend>
+  <depend>std_msgs</depend>
+  
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  
+  <export>
+  </export>
+</package>
