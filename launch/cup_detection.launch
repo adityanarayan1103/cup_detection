@@ -1,7 +1,17 @@
 <launch>
+    <!-- Start USB camera on /dev/video1 -->
+    <node name="usb_cam" pkg="usb_cam" type="usb_cam_node" respawn="true" respawn_delay="2" output="screen">
+        <param name="video_device" value="/dev/video1" />
+        <param name="image_width" value="640" />
+        <param name="image_height" value="480" />
+        <param name="pixel_format" value="yuyv" />
+        <param name="camera_frame_id" value="usb_cam" />
+        <param name="io_method" value="mmap"/>
+    </node>
+
+    <!-- Start cup detection with PyTorch fix -->
     <node pkg="cup_detection" type="cup_detection_node.py" name="cup_detection" output="screen">
         <!-- Fix for PyTorch TLS allocation error on ARM devices -->
         <env name="LD_PRELOAD" value="/usr/lib/aarch64-linux-gnu/libgomp.so.1" />
-        <!-- Add any params here if needed -->
     </node>
 </launch>
