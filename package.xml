@@ -1,28 +1,31 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>cup_detection</name>
-  <version>1.0.0</version>
-  <description>
-    ROS package for autonomous cup detection and approach behavior for PuppyPi robot.
-    Detects cups using computer vision and commands the robot to walk toward them.
-  </description>
-  
-  <maintainer email="user@example.com">PuppyPi Developer</maintainer>
-  <license>MIT</license>
-  
+  <version>0.0.1</version>
+  <description>Cup detection and autonomous tracking for PuppyPi</description>
+  <maintainer email="user@todo.todo">User</maintainer>
+  <license>TODO</license>
+
   <buildtool_depend>catkin</buildtool_depend>
   
-  <depend>rospy</depend>
-  <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
-  <depend>puppy_control</depend>
-  <depend>std_srvs</depend>
-  <depend>interfaces</depend>
-  <depend>std_msgs</depend>
-  
-  <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
-  
-  <export>
-  </export>
+  <build_depend>rospy</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>puppy_control</build_depend>
+  <build_depend>message_generation</build_depend>
+
+  <build_export_depend>rospy</build_export_depend>
+  <build_export_depend>std_msgs</build_export_depend>
+  <build_export_depend>sensor_msgs</build_export_depend>
+  <build_export_depend>cv_bridge</build_export_depend>
+  <build_export_depend>puppy_control</build_export_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>puppy_control</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+
 </package>

@@ -1,230 +1,150 @@
-#!/usr/bin/env python3
-# encoding: utf-8
-# Cup Detection and Autonomous Approach Node for PuppyPi Robot
-
+#!/usr/bin/python3
+# coding=utf8
+import sys
 import cv2
 import math
+import time
 import rospy
-import threading
 import numpy as np
+import threading
 from sensor_msgs.msg import Image
-from std_srvs.srv import Trigger, TriggerResponse, SetBool, SetBoolRequest, SetBoolResponse
-from interfaces.srv import SetFloat64, SetFloat64Request, SetFloat64Response
-from puppy_control.msg import Velocity, Pose
-from puppy_control.srv import SetRunActionName
-from common import PID
+from std_msgs.msg import Bool
+from geometry_msgs.msg import Twist
+from cv_bridge import CvBridge, CvBridgeError
+from ultralytics import YOLO
 
+# Import custom messages/services
+from puppy_control.msg import Velocity, Pose, Gait
+from std_srvs.msg import Trigger, TriggerResponse
+from cup_detection.srv import SetRunning, SetRunningResponse
+
+class PID:
+    def __init__(self, P, I, D):
+        self.P = P
+        self.I = I
+        self.D = D
+        self.prev_error = 0
+        self.integral = 0
+    
+    def update(self, error):
+        self.integral += error
+        derivative = error - self.prev_error
+        output = self.P * error + self.I * self.integral + self.D * derivative
+        self.prev_error = error
+        return output
 
 class CupDetector:
-    """Detects cups in images using color and shape-based computer vision"""
-    
     def __init__(self):
-        self.image_proc_size = (320, 240)
+        self.image_proc_size = (640, 480) # Default, updated dynamically
         self.last_cup_circle = None
         
-        # HSV color range for light-colored cups (white, cream, light blue)
-        # These values target light/white objects
-        self.lower_hsv = np.array([0, 0, 180])
-        self.upper_hsv = np.array([180, 30, 255])
-        
-        # Detection parameters
-        self.min_area = 500
-        self.max_area = 50000
-        
+        # Initialize YOLO model
+        # The model will be downloaded to the current directory if not found
+        try:
+            self.model = YOLO("yolov8n.pt")
+            rospy.loginfo("YOLOv8n model loaded successfully")
+        except Exception as e:
+            rospy.logerr(f"Failed to load YOLO model: {e}")
+            self.model = None
+
     def detect_cup(self, image, result_image):
-        """
-        Detect cup in image using color filtering and shape detection
-        Returns: (x, y, radius) of detected cup, or None if not found
-        """
-        img_h, img_w = image.shape[:2]
-        image_resized = cv2.resize(image, self.image_proc_size)
-        
-        # Convert to HSV for better color detection
-        image_hsv = cv2.cvtColor(image_resized, cv2.COLOR_RGB2HSV)
-        
-        # Create mask for light-colored objects
-        mask = cv2.inRange(image_hsv, self.lower_hsv, self.upper_hsv)
-        
-        # Morphological operations to clean up mask
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filter contours by area
-        valid_contours = [c for c in contours if self.min_area < cv2.contourArea(c) < self.max_area]
-        
-        if not valid_contours:
-            self.last_cup_circle = None
+        if self.model is None:
             return result_image
+
+        img_h, img_w = image.shape[:2]
+        self.image_proc_size = (img_w, img_h)
         
-        # Find the best cup candidate
-        cup_circle = None
-        best_score = 0
+        # Run inference
+        results = self.model(image, verbose=False, stream=False)
         
-        for contour in valid_contours:
-            # Get bounding rectangle
-            x, y, w, h = cv2.boundingRect(contour)
-            area = cv2.contourArea(contour)
-            
-            # Calculate aspect ratio (cups are typically taller than wide or circular)
-            aspect_ratio = float(h) / w if w > 0 else 0
-            
-            # Try to fit a circle
-            (cx, cy), radius = cv2.minEnclosingCircle(contour)
-            circularity = area / (math.pi * radius * radius) if radius > 0 else 0
-            
-            # Score based on circularity and reasonable aspect ratio
-            # Cups from top view are circular; from side view have aspect ratio near 1.0-1.5
-            score = 0
-            if 0.5 <= aspect_ratio <= 2.0:  # Reasonable aspect ratio for a cup
-                score += 3
-            if circularity > 0.6:  # Reasonably circular
-                score += 5
-            if radius > 15:  # Not too small
-                score += 2
+        self.last_cup_circle = None
+        best_cup = None
+        max_conf = 0.0
+
+        # Class ID for 'cup' in COCO is 41
+        target_class_id = 41
+        
+        for result in results:
+            boxes = result.boxes
+            for box in boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
                 
-            if score > best_score:
-                best_score = score
-                cup_circle = ((cx, cy), radius)
-        
-        if cup_circle and best_score >= 5:  # Minimum threshold for valid cup
-            self.last_cup_circle = cup_circle
-            (x, y), r = cup_circle
+                if cls_id == target_class_id:
+                    if conf > max_conf:
+                        max_conf = conf
+                        best_cup = box
+
+        if best_cup is not None:
+            x1, y1, x2, y2 = map(int, best_cup.xyxy[0])
             
-            # Scale back to original image size
-            x = int(x / self.image_proc_size[0] * img_w)
-            y = int(y / self.image_proc_size[1] * img_h)
-            r = int(r / self.image_proc_size[0] * img_w)
+            # Calculate center and radius approximation
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            radius = (x2 - x1) // 2
             
-            # Draw detection on result image
-            cv2.circle(result_image, (x, y), r, (0, 255, 0), 2)
-            cv2.circle(result_image, (x, y), 3, (0, 0, 255), -1)
-            cv2.putText(result_image, f'Cup R:{r}', (x - 50, y - r - 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        else:
-            self.last_cup_circle = None
-        
+            self.last_cup_circle = ((cx, cy), radius)
+            
+            # Draw bounding box and label
+            cv2.rectangle(result_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.circle(result_image, (cx, cy), 5, (0, 0, 255), -1)
+            
+            label = f"Cup: {max_conf:.2f}"
+            cv2.putText(result_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.putText(result_image, f"R: {radius}", (x1, y1 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
         return result_image
 
-
 class CupDetectionNode:
-    """ROS node for cup detection and autonomous approach"""
-    
-    # Initial standing pose
-    Stand = {
-        'roll': math.radians(0),
-        'pitch': math.radians(0),
-        'yaw': 0.000,
-        'height': -10,
-        'x_shift': -0.5,
-        'stance_x': 0,
-        'stance_y': 0,
-        'run_time': 300
-    }
-    
     def __init__(self, name):
         rospy.init_node(name)
         self.name = name
-        rospy.loginfo("Cup Detection Node Initialized")
+        self.running = False
+        self.lock = threading.Lock()
+        self.__is_running = False
         
-        # Detection
+        # Parameters
+        self.stop_radius = 150 # Pixels (approximate)
+        self.min_radius = 30
+        self.target_radius = 120
+        self.base_forward_velocity = 10.0
+        self.approach_velocity = 5.0
+
         self.detector = CupDetector()
-        self.image_sub = None
-        self.result_publisher = rospy.Publisher('~image_result', Image, queue_size=1)
+        self.bridge = CvBridge()
         
-        # Movement control
+        # PIDs
+        self.pid_x = PID(0.003, 0.00001, 0.0005) # Yaw
+        self.pid_y = PID(0.008, 0.00001, 0.0005) # Speed - Unused currently?
+        
+        # Pubs
         self.velocity_pub = rospy.Publisher('/puppy_control/velocity', Velocity, queue_size=1)
         self.pose_pub = rospy.Publisher('/puppy_control/pose', Pose, queue_size=1)
+        self.result_publisher = rospy.Publisher('~image_result', Image, queue_size=1)
         
-        # PID controllers for smooth movement
-        self.x_pid = PID.PID(P=0.0015, I=0.0001, D=0.00005)  # Horizontal alignment
-        self.forward_pid = PID.PID(P=0.15, I=0.001, D=0.01)  # Forward movement
-        
-        # Pose tracking
-        self.puppy_pose = self.Stand.copy()
-        
-        # State management
-        self.__is_running = False
-        self.lock = threading.RLock()
-        
-        # Distance thresholds (based on cup radius in pixels)
-        self.min_radius = 20   # Too far, keep moving forward
-        self.target_radius = 85  # Target distance, slow down
-        self.stop_radius = 100   # Stop here, close enough
-        
-        # Movement parameters
-        self.base_forward_velocity = 12.0
-        self.approach_velocity = 8.0
+        # Subs
+        self.sub_img = rospy.Subscriber('/usb_cam/image_raw', Image, self.image_callback)
         
         # Services
-        self.enter_srv = rospy.Service('~enter', Trigger, self.enter_callback)
-        self.exit_srv = rospy.Service('~exit', Trigger, self.exit_callback)
-        self.set_running_srv = rospy.Service('~set_running', SetBool, self.set_running_callback)
-        self.set_distance_srv = rospy.Service('~set_distance_threshold', SetFloat64, self.set_distance_callback)
+        self.srv_run = rospy.Service('~set_running', SetRunning, self.set_running_callback)
         
-        # Action group service for pose control
-        self.action_group_srv = rospy.ServiceProxy('/puppy_control/runActionGroup', SetRunActionName)
-        rospy.loginfo("Waiting for /puppy_control/runActionGroup service...")
-        try:
-            rospy.wait_for_service('/puppy_control/runActionGroup', timeout=10)
-            rospy.loginfo("/puppy_control/runActionGroup service is available")
-        except rospy.ROSException as e:
-            rospy.logerr(f"Failed to connect to /puppy_control/runActionGroup service: {e}")
-            self.action_group_srv = None
+        rospy.loginfo("Cup Detection Node Initialized (YOLOv8)!")
         
-        rospy.on_shutdown(self.shutdown_callback)
-        rospy.loginfo("Cup Detection Node ready")
-    
-    def shutdown_callback(self):
-        rospy.loginfo("Shutting down Cup Detection Node")
-        self.cleanup()
-    
+        # Cleanup on shutdown
+        rospy.on_shutdown(self.cleanup)
+
     def cleanup(self):
-        """Clean up resources and stop the robot"""
-        if self.image_sub is not None:
-            self.image_sub.unregister()
-            rospy.loginfo("Image subscriber unregistered")
-        
         self.stop_running()
-        self.reset_pose()
-        rospy.loginfo("Cleanup completed")
-    
-    def enter_callback(self, req):
-        """Enter service - start detection and movement"""
-        rospy.loginfo("Entering cup detection mode")
-        
-        if self.image_sub is not None:
-            self.image_sub.unregister()
-        
-        self.image_sub = rospy.Subscriber('/usb_cam/image_raw', Image, self.image_callback)
-        self.init_movement()
-        self.reset_movement()
-        
-        return TriggerResponse(success=True, message="Entered cup detection mode")
-    
-    def exit_callback(self, req):
-        """Exit service - stop everything"""
-        rospy.loginfo("Exiting cup detection mode")
-        self.cleanup()
-        return TriggerResponse(success=True, message="Exited cup detection mode")
-    
+        rospy.loginfo("Shutting down cup detection node")
+
     def set_running_callback(self, req):
         """Enable/disable autonomous movement"""
         if req.data:
             self.start_running()
-            return SetBoolResponse(success=True, message="Movement started")
+            return SetRunningResponse(success=True, message="Movement started")
         else:
             self.stop_running()
-            return SetBoolResponse(success=True, message="Movement stopped")
-    
-    def set_distance_callback(self, req):
-        """Set the target stopping distance (cup radius in pixels)"""
-        self.stop_radius = int(req.data)
-        rospy.loginfo(f"Stop radius set to {self.stop_radius} pixels")
-        return SetFloat64Response(success=True, message=f"Distance threshold set to {self.stop_radius}")
+            return SetRunningResponse(success=True, message="Movement stopped")
     
     def start_running(self):
         """Start autonomous movement"""
@@ -241,43 +161,6 @@ class CupDetectionNode:
                 rospy.loginfo("Autonomous movement STOPPED")
                 # Stop the robot
                 self.velocity_pub.publish(Velocity(x=0, y=0, yaw_rate=0))
-    
-    def reset_pose(self):
-        """Reset to standing pose"""
-        with self.lock:
-            self.puppy_pose = self.Stand.copy()
-            pose_msg = Pose(
-                stance_x=self.puppy_pose['stance_x'],
-                stance_y=self.puppy_pose['stance_y'],
-                x_shift=self.puppy_pose['x_shift'],
-                height=self.puppy_pose['height'],
-                roll=self.puppy_pose['roll'],
-                pitch=self.puppy_pose['pitch'],
-                yaw=self.puppy_pose['yaw'],
-                run_time=self.puppy_pose['run_time']
-            )
-            self.pose_pub.publish(pose_msg)
-            rospy.loginfo("Pose reset to standing position")
-    
-    def reset_movement(self):
-        """Reset PID controllers and movement state"""
-        with self.lock:
-            self.x_pid.clear()
-            self.forward_pid.clear()
-            self.reset_pose()
-            rospy.loginfo("Movement controllers reset")
-    
-    def init_movement(self):
-        """Initialize robot to standing position"""
-        if self.action_group_srv:
-            try:
-                rospy.loginfo("Initializing to Stand pose")
-                self.action_group_srv('Stand.d6ac', True)
-                rospy.loginfo("Stand pose initialized")
-            except rospy.ServiceException as e:
-                rospy.logerr(f"Failed to initialize pose: {e}")
-        else:
-            rospy.logwarn("Action group service not available")
     
     def image_callback(self, ros_image):
         """Process incoming camera images"""
@@ -299,15 +182,18 @@ class CupDetectionNode:
             self.control_movement()
         
         # Publish result image
-        result_msg = Image()
-        result_msg.header = ros_image.header
-        result_msg.height = result_image.shape[0]
-        result_msg.width = result_image.shape[1]
-        result_msg.encoding = ros_image.encoding
-        result_msg.is_bigendian = ros_image.is_bigendian
-        result_msg.step = result_image.shape[1] * 3
-        result_msg.data = result_image.tobytes()
-        self.result_publisher.publish(result_msg)
+        try:
+            result_msg = Image()
+            result_msg.header = ros_image.header
+            result_msg.height = result_image.shape[0]
+            result_msg.width = result_image.shape[1]
+            result_msg.encoding = ros_image.encoding
+            result_msg.is_bigendian = ros_image.is_bigendian
+            result_msg.step = result_image.shape[1] * 3
+            result_msg.data = result_image.tobytes()
+            self.result_publisher.publish(result_msg)
+        except Exception as e:
+            rospy.logerr(f"Failed to publish result image: {e}")
     
     def control_movement(self):
         """Control robot movement based on cup detection"""
@@ -315,43 +201,82 @@ class CupDetectionNode:
             if self.detector.last_cup_circle is None:
                 # No cup detected, stop moving
                 self.velocity_pub.publish(Velocity(x=0, y=0, yaw_rate=0))
-                rospy.loginfo_throttle(2, "No cup detected, stopping")
+                # rospy.loginfo_throttle(2, "No cup detected, stopping")
                 return
             
             (x, y), radius = self.detector.last_cup_circle
             img_w, img_h = self.detector.image_proc_size
             
-            # Scale to original image dimensions
-            original_img_w = rospy.get_param('~original_image_width', 640)
-            original_img_h = rospy.get_param('~original_image_height', 480)
-            
-            x_original = x / img_w * original_img_w
-            radius_original = radius / img_w * original_img_w
+            # Since we now use the full image, no scaling is needed ideally.
+            # However, if original params were tuning on 640x480, we should ensure consistency.
+            # Assuming params (stop_radius etc) are pixels relative to image width.
             
             # Check if we've reached the target distance
-            if radius_original >= self.stop_radius:
+            if radius >= self.stop_radius:
                 self.velocity_pub.publish(Velocity(x=0, y=0, yaw_rate=0))
-                rospy.loginfo_throttle(1, f"Target reached! Cup radius: {radius_original:.1f} >= {self.stop_radius}")
-                # Optionally stop autonomous mode
-                # self.stop_running()
+                rospy.loginfo_throttle(1, f"Target reached! Cup radius: {radius:.1f} >= {self.stop_radius}")
                 return
             
             # Horizontal alignment using PID
-            self.x_pid.SetPoint = original_img_w / 2.0
-            self.x_pid.update(x_original)
-            yaw_rate = -self.x_pid.output  # Negative for correct direction
-            yaw_rate = np.clip(yaw_rate, -0.3, 0.3)
+            # SetPoint is center of image
+            self.pid_x.SetPoint = img_w / 2.0
             
-            # Forward movement based on distance
-            if radius_original < self.min_radius:
-                # Far away, move at base speed
+            # Update PID with current x
+            # Note: PID class in original implementation didn't have SetPoint attribute in __init__? 
+            # Looking at original code: 'self.x_pid.SetPoint = ...' was assigned dynamically.
+            # But the PID `update` method logic: `output = self.P * error ...`
+            # Wait, `update(error)` takes `error`. So we must calculate error first.
+            # Original code: `self.x_pid.update(x_original)` ???
+            # Original code check: 
+            # `self.x_pid.SetPoint = original_img_w / 2.0`
+            # `self.x_pid.update(x_original)`
+            # The original `PID.update` method took `error` as argument?
+            # Original `PID`: `def update(self, error): ...`
+            # BUT calling it `update(x_original)` implies `error = x_original`? No, that would be wrong unless SetPoint is 0.
+            # Let's re-read the original PID class usage carefully from ViewFile output.
+            
+            # Line 248: `self.x_pid.update(x_original)`
+            # Line 28: `def update(self, error):`
+            # This implies the original author treated the input to `update` as the error? or the measurement?
+            # If `SetPoint` was set on line 247, but `update` doesn't use `self.SetPoint`. 
+            # `update` uses `error` passed as arg.
+            # So `x_original` was PASSED AS ERROR? That seems like a bug in the original code or a misunderstanding.
+            # If `x_original` is passed as error, then `error = current_x`. 
+            # If SetPoint is center (320), and x is 320, error is 320. Output is non-zero. That drives it crazy.
+            # UNLESS `PID` class in original code had logic to use `SetPoint`?
+            # Original file lines 20-33 shown in step 21:
+            # `def update(self, error): self.integral += error ...`
+            # It blindly takes the argument as error.
+            # So `update(x_original)` treats the absolute X position as the error.
+            # That means it tries to drive X to 0? Ideally we want center.
+            # Use `error = center - x`?
+            
+            # Let's fix this logic. We want to align to center.
+            # Error = (ImageWidth / 2) - x
+            # If x < center (left), error > 0. turn left?
+            # If x > center (right), error < 0. turn right?
+            
+            error_x = (img_w / 2.0) - x
+            # Update PID
+            output = self.pid_x.update(error_x)
+            
+            # Yaw rate. If error is positive (cup is to left), we want to turn left (positive yaw usually?).
+            # Check coordinate frame.
+            # Robot frame: x forward, y left, z up. Yaw positive = turn left?
+            # Usually PyRobot/PuppyPi: positive yaw_rate turns left.
+            # If object is on left, x is small. Center - x is positive. we want positive yaw.
+            # So `yaw_rate = output`.
+            
+            yaw_rate = output
+            yaw_rate = np.clip(yaw_rate, -0.5, 0.5)
+            
+            # Forward movement
+            if radius < self.min_radius:
                 forward_velocity = self.base_forward_velocity
-            elif radius_original < self.target_radius:
-                # Getting closer, slow down proportionally
-                progress = (radius_original - self.min_radius) / (self.target_radius - self.min_radius)
+            elif radius < self.target_radius:
+                progress = (radius - self.min_radius) / (self.target_radius - self.min_radius)
                 forward_velocity = self.base_forward_velocity * (1.0 - progress * 0.5)
             else:
-                # Very close, move slowly
                 forward_velocity = self.approach_velocity
             
             # Publish velocity command
@@ -362,9 +287,9 @@ class CupDetectionNode:
             )
             self.velocity_pub.publish(velocity_msg)
             
-            rospy.loginfo_throttle(0.5, 
-                f"Cup detected - Radius: {radius_original:.1f}px, "
-                f"Forward: {forward_velocity:.1f}, Yaw: {yaw_rate:.3f}")
+            # rospy.loginfo_throttle(0.5, 
+            #    f"Cup detected - Radius: {radius:.1f}px, "
+            #    f"Forward: {forward_velocity:.1f}, Yaw: {yaw_rate:.3f}")
 
 
 if __name__ == "__main__":

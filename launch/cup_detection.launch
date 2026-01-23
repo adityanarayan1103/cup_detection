@@ -1,30 +1,5 @@
-<?xml version="1.0"?>
 <launch>
-    <!-- Cup Detection Node Launch File -->
-    
-    <!-- Node Parameters -->
-    <arg name="node_name" default="cup_detection" />
-    <arg name="auto_start" default="false" />
-    <arg name="stop_radius" default="100" />
-    
-    <!-- Camera parameters -->
-    <arg name="camera_topic" default="/usb_cam/image_raw" />
-    <arg name="image_width" default="640" />
-    <arg name="image_height" default="480" />
-    
-    <!-- Cup Detection Node -->
-    <node name="$(arg node_name)" pkg="cup_detection" type="cup_detection_node.py" output="screen">
-        <param name="original_image_width" value="$(arg image_width)" />
-        <param name="original_image_height" value="$(arg image_height)" />
-        <remap from="~image" to="$(arg camera_topic)" />
+    <node pkg="cup_detection" type="cup_detection_node.py" name="cup_detection" output="screen">
+        <!-- Add any params here if needed -->
     </node>
-    
-    <!-- Auto-start if requested -->
-    <node if="$(arg auto_start)" name="cup_detection_auto_start" pkg="rosservice" 
-          type="rosservice" args="call /$(arg node_name)/enter" 
-          launch-prefix="bash -c 'sleep 2; $0 $@' " />
-    
-    <node if="$(arg auto_start)" name="cup_detection_auto_run" pkg="rosservice" 
-          type="rosservice" args="call /$(arg node_name)/set_running true" 
-          launch-prefix="bash -c 'sleep 3; $0 $@' " />
 </launch>

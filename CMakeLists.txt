@@ -3,21 +3,26 @@ project(cup_detection)
 
 find_package(catkin REQUIRED COMPONENTS
   rospy
-  sensor_msgs
-  std_srvs
-  puppy_control
-  interfaces
   std_msgs
+  sensor_msgs
+  cv_bridge
+  puppy_control
+  message_generation
+)
+
+add_service_files(
+  FILES
+  SetRunning.srv
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+  puppy_control
 )
 
 catkin_package(
-  CATKIN_DEPENDS 
-    rospy 
-    sensor_msgs 
-    std_srvs 
-    puppy_control 
-    interfaces
-    std_msgs
+  CATKIN_DEPENDS rospy std_msgs sensor_msgs cv_bridge puppy_control
 )
 
 include_directories(
@@ -27,8 +32,4 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/cup_detection_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
-install(DIRECTORY launch/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
 )
