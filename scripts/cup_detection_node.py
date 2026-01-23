@@ -15,7 +15,7 @@ from ultralytics import YOLO
 
 # Import custom messages/services
 from puppy_control.msg import Velocity, Pose, Gait
-from std_srvs.msg import Trigger, TriggerResponse
+from std_srvs.srv import Trigger, TriggerResponse
 from cup_detection.srv import SetRunning, SetRunningResponse
 
 class PID:
