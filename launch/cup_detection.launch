@@ -1,5 +1,7 @@
 <launch>
     <node pkg="cup_detection" type="cup_detection_node.py" name="cup_detection" output="screen">
+        <!-- Fix for PyTorch TLS allocation error on ARM devices -->
+        <env name="LD_PRELOAD" value="/usr/lib/aarch64-linux-gnu/libgomp.so.1" />
         <!-- Add any params here if needed -->
     </node>
 </launch>
