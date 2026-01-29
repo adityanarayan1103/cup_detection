@@ -142,6 +142,45 @@ z_pid = PID(P=0.003, I=0.001, D=0.0)       # Pitch control
 
 3. **YOLO Model Download**: First run downloads ~6MB model (requires internet)
 
+## Proof of Concept Logs
+
+### Node Initialization
+```
+[INFO] [1769147806.832829]: YOLOv8n model loaded successfully
+[INFO] [1769147806.839089]: Cup Detection Node Initialized (Enhanced YOLOv8)!
+```
+
+### Service Calls
+```bash
+$ rosservice call /cup_detection/enter
+success: True
+message: "Entered cup detection mode"
+
+$ rosservice call /cup_detection/set_running "data: true"
+success: True
+message: "Movement started"
+```
+
+### Detection Mode Active
+```
+[INFO] Entering cup detection mode
+[INFO] Initialized to Stand pose
+[INFO] Movement control started
+```
+
+### YOLO Model Download (First Run)
+```
+Downloading https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt to 'yolov8n.pt'...
+100%|████████████████████████████████████| 6.23M/6.23M [00:01<00:00, 5.96MB/s]
+```
+
+### catkin_make Build
+```
+-- cup_detection: 0 messages, 1 services
+-- Installing devel-space wrapper .../cup_detection_node.py to .../devel/lib/cup_detection
+[100%] Built target cup_detection_generate_messages
+```
+
 ## Future Improvements
 
 - [ ] Support for multiple object classes (not just cups)
